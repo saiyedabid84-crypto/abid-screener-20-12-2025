@@ -9,8 +9,9 @@ st.set_page_config("Demand & Supply Scanner", layout="wide")
 # ---------------- LOAD NIFTY 500 ---------------- #
 @st.cache_data
 def load_nifty500():
-    df = pd.read_csv("nifty500.csv")  # column: Symbol
-   return [s + ".NS" for s in df["Symbol"]]
+    df = pd.read_csv("nifty500.csv")
+    return [s + ".NS" for s in df["Symbol"].astype(str)]
+
 
 STOCKS = load_nifty500()[:50]
 
