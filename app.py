@@ -10,7 +10,15 @@ st.set_page_config("Demand & Supply Scanner", layout="wide")
 @st.cache_data
 def load_nifty500():
     df = pd.read_csv("nifty500.csv")
-    return [s + ".NS" for s in df["Symbol"].astype(str)]
+
+    # Clean column names
+    df.columns = df.columns.str.strip()
+
+    # Take the first (and only) column as company names
+    companies = df.iloc[:, 0].astype(str).str.strip()
+
+    return companies.tolist()
+
 
 
 STOCKS = load_nifty500()[:50]
