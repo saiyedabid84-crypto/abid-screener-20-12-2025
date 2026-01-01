@@ -59,68 +59,97 @@ def rr_ok(entry, sl, target):
     reward = abs(target - entry)
     return risk > 0 and reward / risk >= 3
 
+def fetch_data(symbol, interval):
+df = yf.download(symbol, period="1y", interval=interval, progress=False)
+
+
+# Flatten yfinance MultiIndex columns (CRITICAL)
+if isinstance(df.columns, pd.MultiIndex):
+df.columns = df.columns.get_level_values(0)
+
+
+return df
+
 # ---------------- ZONE DETECTION ---------------- #
 def detect_zones(df, tf):
-    results = []
-    avg_range = (df["High"] - df["Low"]).rolling(20).mean()
-    max_base = 3 if tf in ["15m","30m","60m","75m","120m","125m","240m"] else 6
-    price = df.iloc[-1]["Close"]
+results = []
 
-    for i in range(len(df) - max_base - 2):
-        leg_in = df.iloc[i]
-        base = df.iloc[i+1:i+1+max_base]
-        leg_out = df.iloc[i+1+max_base]
 
-        if base.empty:
-            continue
+# Safety cleanup
+df = df.dropna()
 
-        zh, zl = base["High"].max(), base["Low"].min()
 
-        # -------- SUPPLY -------- #
+avg_range = (df["High"] - df["Low"]).rolling(20).mean()
+max_base = 3 if tf in ["15m","30m","60m","75m","120m","125m","240m"] else 6
+price = float(df.iloc[-1]["Close"])
+
+
+for i in range(len(df) - max_base - 2):
+leg_in = df.iloc[i]
+base = df.iloc[i + 1 : i + 1 + max_base]
+leg_out = df.iloc[i + 1 + max_base]
+
+
+if base.empty:
+continue
+
+
+zh = float(base["High"].max())
+zl = float(base["Low"].min())
+
+
 avg = avg_range.iloc[i]
 if pd.isna(avg):
-    continue
+continue
+
+
+# Force scalar OHLC values
+ci = float(leg_in["Close"])
+oi = float(leg_in["Open"])
+co = float(leg_out["Close"])
+oo = float(leg_out["Open"])
+
+        # -------- SUPPLY -------- #
 if (
-    leg_in["Close"].item() > leg_in["Open"].item()
-    and leg_out["Close"].item() < leg_out["Open"].item()
-    and is_explosive(leg_in, avg)
-    and is_explosive(leg_out, avg)
+ci > oi
+and co < oo
+and is_explosive(leg_in, avg)
+and is_explosive(leg_out, avg)
 ):
-    entry = zh
-    sl = zh * 1.002
-    target = entry - (entry - sl) * 3
-    if (
-        is_one_touch(df, zh, zl, i)
-        and within_1_percent(price, zh, zl)
-        and rr_ok(entry, sl, target)
-    ):
-        results.append(
-            ("Supply", entry, sl, target, zh, zl)
-        )
+entry = zh
+sl = zh * 1.002
+target = entry - (entry - sl) * 3
+
+
+if (
+is_one_touch(df, zh, zl, i)
+and within_1_percent(price, zh, zl)
+and rr_ok(entry, sl, target)
+):
+results.append(("Supply", entry, sl, target, zh, zl))
 
 
         # -------- DEMAND -------- #
-        if (
-            leg_in["Close"] < leg_in["Open"]
-            and leg_out["Close"] > leg_out["Open"]
-            and is_explosive(leg_in, avg_range.iloc[i])
-            and is_explosive(leg_out, avg_range.iloc[i])
-        ):
-            entry = zl
-            sl = zl * 0.998
-            target = entry + (entry - sl) * 3
+      if (
+ci < oi
+and co > oo
+and is_explosive(leg_in, avg)
+and is_explosive(leg_out, avg)
+):
+entry = zl
+sl = zl * 0.998
+target = entry + (entry - sl) * 3
 
-            if (
-                is_one_touch(df, zh, zl, i)
-                and within_1_percent(price, zh, zl)
-                and rr_ok(entry, sl, target)
-            ):
-                results.append(
-                    ("Demand", entry, sl, target, zh, zl)
-                )
 
-    return results
+if (
+is_one_touch(df, zh, zl, i)
+and within_1_percent(price, zh, zl)
+and rr_ok(entry, sl, target)
+):
+results.append(("Demand", entry, sl, target, zh, zl))
 
+
+return results
 # ---------------- PLOT ---------------- #
 def plot_chart(df, zones, symbol, tf):
     fig = go.Figure()
