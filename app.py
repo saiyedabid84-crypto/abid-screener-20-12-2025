@@ -77,24 +77,27 @@ def detect_zones(df, tf):
         zh, zl = base["High"].max(), base["Low"].min()
 
         # -------- SUPPLY -------- #
-        if (
-            leg_in["Close"] > leg_in["Open"]
-            and leg_out["Close"] < leg_out["Open"]
-            and is_explosive(leg_in, avg_range.iloc[i])
-            and is_explosive(leg_out, avg_range.iloc[i])
-        ):
-            entry = zh
-            sl = zh * 1.002
-            target = entry - (entry - sl) * 3
+avg = avg_range.iloc[i]
+if pd.isna(avg):
+    continue
+if (
+    leg_in["Close"].item() > leg_in["Open"].item()
+    and leg_out["Close"].item() < leg_out["Open"].item()
+    and is_explosive(leg_in, avg)
+    and is_explosive(leg_out, avg)
+):
+    entry = zh
+    sl = zh * 1.002
+    target = entry - (entry - sl) * 3
+    if (
+        is_one_touch(df, zh, zl, i)
+        and within_1_percent(price, zh, zl)
+        and rr_ok(entry, sl, target)
+    ):
+        results.append(
+            ("Supply", entry, sl, target, zh, zl)
+        )
 
-            if (
-                is_one_touch(df, zh, zl, i)
-                and within_1_percent(price, zh, zl)
-                and rr_ok(entry, sl, target)
-            ):
-                results.append(
-                    ("Supply", entry, sl, target, zh, zl)
-                )
 
         # -------- DEMAND -------- #
         if (
