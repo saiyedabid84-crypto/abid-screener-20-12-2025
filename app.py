@@ -54,17 +54,18 @@ def within_1_percent(price, zh, zl):
     return d <= 1
 
 def rr_ok(entry, sl, target):
+    
     risk = abs(entry - sl)
     reward = abs(target - entry)
     return risk > 0 and reward / risk >= 3
 
 def fetch_data(symbol, interval):
-df = yf.download(symbol, period="1y", interval=interval, progress=False)
+    df = yf.download(symbol, period="1y", interval=interval, progress=False)
 
 
 # Flatten yfinance MultiIndex columns (CRITICAL)
 if isinstance(df.columns, pd.MultiIndex):
-df.columns = df.columns.get_level_values(0)
+    df.columns = df.columns.get_level_values(0)
 
 
 return df
@@ -84,13 +85,13 @@ price = float(df.iloc[-1]["Close"])
 
 
 for i in range(len(df) - max_base - 2):
-leg_in = df.iloc[i]
-base = df.iloc[i + 1 : i + 1 + max_base]
-leg_out = df.iloc[i + 1 + max_base]
+    leg_in = df.iloc[i]
+    base = df.iloc[i + 1 : i + 1 + max_base]
+    leg_out = df.iloc[i + 1 + max_base]
 
 
 if base.empty:
-continue
+    continue
 
 
 zh = float(base["High"].max())
