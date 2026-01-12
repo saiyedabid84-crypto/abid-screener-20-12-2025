@@ -72,7 +72,7 @@ return df
 
 # ---------------- ZONE DETECTION ---------------- #
 def detect_zones(df, tf):
-results = []
+    results = []
 
 
 # Safety cleanup
@@ -85,93 +85,101 @@ price = float(df.iloc[-1]["Close"])
 
 
 for i in range(len(df) - max_base - 2):
-    leg_in = df.iloc[i]
-    base = df.iloc[i + 1 : i + 1 + max_base]
-    leg_out = df.iloc[i + 1 + max_base]
-
-
-if base.empty:
-    continue
-
-
-zh = float(base["High"].max())
-zl = float(base["Low"].min())
-
-
-avg = avg_range.iloc[i]
-if pd.isna(avg):
-continue
-
-
-# Force scalar OHLC values
-ci = float(leg_in["Close"])
-oi = float(leg_in["Open"])
-co = float(leg_out["Close"])
-oo = float(leg_out["Open"])
-
+        leg_in = df.iloc[i]
+        base = df.iloc[i + 1 : i + 1 + max_base]
+        leg_out = df.iloc[i + 1 + max_base]
+        
+        if base.empty:
+            continue
+            
+        zh = float(base["High"].max())
+        zl = float(base["Low"].min())
+        avg = avg_range.iloc[i]
+        
+        if pd.isna(avg):
+            continue
+            
+        # Force scalar OHLC values
+        ci = float(leg_in["Close"])
+        oi = float(leg_in["Open"])
+        co = float(leg_out["Close"])
+        oo = float(leg_out["Open"])
+        
         # -------- SUPPLY -------- #
-if (
-ci > oi
-and co < oo
-and is_explosive(leg_in, avg)
-and is_explosive(leg_out, avg)
-):
-entry = zh
-sl = zh * 1.002
-target = entry - (entry - sl) * 3
-
-
-if (
-is_one_touch(df, zh, zl, i)
-and within_1_percent(price, zh, zl)
-and rr_ok(entry, sl, target)
-):
-results.append(("Supply", entry, sl, target, zh, zl))
-
-
+        if (
+            ci > oi
+            and co < oo
+            and is_explosive(leg_in, avg)
+            and is_explosive(leg_out, avg)
+        ):
+            entry = zh
+            sl = zh * 1.002
+            target = entry - (entry - sl) * 3
+            
+            if (
+                is_one_touch(df, zh, zl, i)
+                and within_1_percent(price, zh, zl)
+                and rr_ok(entry, sl, target)
+            ):
+                results.append(("Supply", entry, sl, target, zh, zl))
+        
         # -------- DEMAND -------- #
-      if (
-ci < oi
-and co > oo
-and is_explosive(leg_in, avg)
-and is_explosive(leg_out, avg)
-):
-entry = zl
-sl = zl * 0.998
-target = entry + (entry - sl) * 3
+        if (
+            ci < oi
+            and co > oo
+            and is_explosive(leg_in, avg)
+            and is_explosive(leg_out, avg)
+        ):
+            entry = zl
+            sl = zl * 0.998
+            target = entry + (entry - sl) * 3
+            
+            if (
+                is_one_touch(df, zh, zl, i)
+                and within_1_percent(price, zh, zl)
+                and rr_ok(entry, sl, target)
+            ):
+                results.append(("Demand", entry, sl, target, zh, zl))
+    
+    return results
 
 
-if (
-is_one_touch(df, zh, zl, i)
-and within_1_percent(price, zh, zl)
-and rr_ok(entry, sl, target)
-):
-results.append(("Demand", entry, sl, target, zh, zl))
-
-
-return results
 # ---------------- PLOT ---------------- #
 def plot_chart(df, zones, symbol, tf):
     fig = go.Figure()
     fig.add_candlestick(
-        x=df.index, open=df["Open"], high=df["High"],
-        low=df["Low"], close=df["Close"]
+        x=df.index, 
+        open=df["Open"], 
+        high=df["High"],
+        low=df["Low"], 
+        close=df["Close"]
     )
-
+    
     for z in zones:
         ztype, entry, sl, tgt, zh, zl = z
         color = "red" if ztype == "Supply" else "green"
-
-        fig.add_shape(type="rect", x0=df.index[0], x1=df.index[-1],
-                      y0=zl, y1=zh, fillcolor=color, opacity=0.25, line_width=0)
-
+        
+        fig.add_shape(
+            type="rect", 
+            x0=df.index[0], 
+            x1=df.index[-1],
+            y0=zl, 
+            y1=zh, 
+            fillcolor=color, 
+            opacity=0.25, 
+            line_width=0
+        )
+        
         fig.add_hline(y=entry, line_dash="dot", line_color="blue")
         fig.add_hline(y=sl, line_dash="dash", line_color="red")
         fig.add_hline(y=tgt, line_dash="dash", line_color="green")
-
-    fig.update_layout(title=f"{symbol} | {tf}", xaxis_rangeslider_visible=False)
+    
+    fig.update_layout(
+        title=f"{symbol} | {tf}", 
+        xaxis_rangeslider_visible=False
+    )
+    
     return fig
-
 # ---------------- UI ---------------- #
 st.title("📊 Demand & Supply Scanner (Exact Entry | SL | Target)")
 
