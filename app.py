@@ -1,278 +1,250 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
+from datetime import datetime, timedelta
+import numpy as np
 
-st.set_page_config("Demand & Supply Scanner", layout="wide")
+st.set_page_config(page_title="125 Min RBR Detector", layout="wide")
 
-# ---------------- LOAD NIFTY 500 ---------------- #
-@st.cache_data
-def load_nifty500():
-    try:
-        df = pd.read_csv("nifty500.csv")
-        
-        # Clean column names
-        df.columns = df.columns.str.strip()
-        
-        # Take the first (and only) column as company names
-        companies = df.iloc[:, 0].astype(str).str.strip()
-        
-        # Add .NS suffix if not present
-        companies_list = []
-        for comp in companies.tolist():
-            if not comp.endswith('.NS'):
-                companies_list.append(f"{comp}.NS")
-            else:
-                companies_list.append(comp)
-        
-        return companies_list
-    except Exception as e:
-        st.error(f"Error loading CSV: {e}")
-        return []
+st.title("📊 125 Minute RBR (Rally-Base-Rally) Pattern Detector")
+st.markdown("Upload your OHLC data or use demo data to detect RBR patterns")
 
+# Sidebar for parameters
+st.sidebar.header("RBR Parameters")
+base_threshold = st.sidebar.slider("Base Consolidation Threshold (%)", 0.5, 5.0, 2.0, 0.1)
+min_rally_percent = st.sidebar.slider("Minimum Rally % Required", 1.0, 10.0, 3.0, 0.5)
+lookback_candles = st.sidebar.slider("Lookback Period (candles)", 20, 100, 50, 5)
 
-STOCKS = load_nifty500()[:50]
+# File upload
+uploaded_file = st.file_uploader("Upload CSV file (columns: Date, Open, High, Low, Close)", type=['csv'])
 
-TIMEFRAMES = {
-    "15m": "15m", "30m": "30m", "60m": "60m", "75m": "75m",
-    "120m": "120m", "125m": "125m", "240m": "240m",
-    "Daily": "1d", "Weekly": "1wk", "Monthly": "1mo"
-}
-
-# ---------------- CORE FUNCTIONS ---------------- #
-def fetch_data(symbol, interval):
-    try:
-        df = yf.download(symbol, period="1y", interval=interval, progress=False)
-        
-        # Flatten yfinance MultiIndex columns (CRITICAL)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        
-        return df
-    except Exception as e:
-        return pd.DataFrame()
-
-
-def is_explosive(c, avg):
-    if pd.isna(avg) or avg == 0:
-        return False
-    return (c["High"] - c["Low"]) >= 2 * avg
-
-
-def is_one_touch(df, zh, zl, idx):
-    touches = 0
-    for _, r in df.iloc[idx+1:].iterrows():
-        if r["High"] >= zl and r["Low"] <= zh:
-            touches += 1
-        if touches > 1:
-            return False
-    return True
-
-
-def within_1_percent(price, zh, zl):
-    if price > zh:
-        d = (price - zh) / price * 100
-    elif price < zl:
-        d = (zl - price) / price * 100
-    else:
-        d = 0
-    return d <= 1
-
-
-def rr_ok(entry, sl, target):
-    risk = abs(entry - sl)
-    reward = abs(target - entry)
-    return risk > 0 and reward / risk >= 3
-
-
-# ---------------- ZONE DETECTION ---------------- #
-def detect_zones(df, tf):
-    results = []
+def generate_demo_data():
+    """Generate demo candlestick data with RBR pattern"""
+    np.random.seed(42)
+    dates = pd.date_range(start='2024-01-01', periods=100, freq='125min')
     
-    # Safety cleanup
-    df = df.dropna()
+    # Create price movement with RBR pattern
+    prices = []
+    base_price = 100
     
-    if len(df) < 60:
-        return results
-    
-    avg_range = (df["High"] - df["Low"]).rolling(20).mean()
-    max_base = 3 if tf in ["15m","30m","60m","75m","120m","125m","240m"] else 6
-    price = float(df.iloc[-1]["Close"])
-    
-    for i in range(len(df) - max_base - 2):
-        leg_in = df.iloc[i]
-        base = df.iloc[i + 1 : i + 1 + max_base]
-        leg_out = df.iloc[i + 1 + max_base]
+    for i in range(100):
+        if i < 20:  # Initial downtrend/consolidation
+            base_price += np.random.uniform(-0.5, 0.3)
+        elif i < 35:  # First Rally
+            base_price += np.random.uniform(0.3, 1.2)
+        elif i < 55:  # Base formation (consolidation)
+            base_price += np.random.uniform(-0.3, 0.3)
+        elif i < 70:  # Second Rally
+            base_price += np.random.uniform(0.4, 1.5)
+        else:  # Continuation
+            base_price += np.random.uniform(-0.5, 0.8)
         
-        if base.empty:
+        prices.append(base_price)
+    
+    df = pd.DataFrame({
+        'Date': dates,
+        'Open': prices,
+        'High': [p + np.random.uniform(0.2, 1.0) for p in prices],
+        'Low': [p - np.random.uniform(0.2, 1.0) for p in prices],
+        'Close': [p + np.random.uniform(-0.5, 0.5) for p in prices]
+    })
+    
+    return df
+
+def detect_rbr_pattern(df, base_threshold_pct, min_rally_pct, lookback):
+    """
+    Detect RBR (Rally-Base-Rally) pattern
+    Returns list of detected patterns with base zones
+    """
+    patterns = []
+    
+    for i in range(lookback, len(df) - 10):
+        # Look for potential base zone
+        base_start = i - 15
+        base_end = i
+        
+        if base_start < 0:
             continue
         
-        zh = float(base["High"].max())
-        zl = float(base["Low"].min())
-        avg = avg_range.iloc[i]
+        base_candles = df.iloc[base_start:base_end]
+        base_high = base_candles['High'].max()
+        base_low = base_candles['Low'].min()
+        base_range_pct = ((base_high - base_low) / base_low) * 100
         
-        if pd.isna(avg):
+        # Check if it's a valid base (consolidation)
+        if base_range_pct > base_threshold_pct:
             continue
         
-        # Force scalar OHLC values
-        ci = float(leg_in["Close"])
-        oi = float(leg_in["Open"])
-        co = float(leg_out["Close"])
-        oo = float(leg_out["Open"])
+        # Check for rally before base
+        rally1_start = max(0, base_start - 15)
+        rally1_candles = df.iloc[rally1_start:base_start]
         
-        # -------- SUPPLY -------- #
-        if (
-            ci > oi
-            and co < oo
-            and is_explosive(leg_in, avg)
-            and is_explosive(leg_out, avg)
-        ):
-            entry = zh
-            sl = zh * 1.002
-            target = entry - abs(sl - entry) * 3  # Fixed: use abs() for correct direction
-            
-            if (
-                is_one_touch(df, zh, zl, i)
-                and within_1_percent(price, zh, zl)
-                and rr_ok(entry, sl, target)
-            ):
-                results.append(("Supply", entry, sl, target, zh, zl))
+        if len(rally1_candles) < 5:
+            continue
         
-        # -------- DEMAND -------- #
-        if (
-            ci < oi
-            and co > oo
-            and is_explosive(leg_in, avg)
-            and is_explosive(leg_out, avg)
-        ):
-            entry = zl
-            sl = zl * 0.998
-            target = entry + abs(entry - sl) * 3
-            
-            if (
-                is_one_touch(df, zh, zl, i)
-                and within_1_percent(price, zh, zl)
-                and rr_ok(entry, sl, target)
-            ):
-                results.append(("Demand", entry, sl, target, zh, zl))
+        rally1_low = rally1_candles['Low'].min()
+        rally1_gain_pct = ((base_low - rally1_low) / rally1_low) * 100
+        
+        # Check for rally after base
+        rally2_end = min(len(df), base_end + 15)
+        rally2_candles = df.iloc[base_end:rally2_end]
+        
+        if len(rally2_candles) < 5:
+            continue
+        
+        rally2_high = rally2_candles['High'].max()
+        rally2_gain_pct = ((rally2_high - base_high) / base_high) * 100
+        
+        # Validate RBR pattern
+        if rally1_gain_pct >= min_rally_pct and rally2_gain_pct >= min_rally_pct:
+            patterns.append({
+                'base_start_idx': base_start,
+                'base_end_idx': base_end,
+                'base_high': base_high,
+                'base_low': base_low,
+                'base_range_pct': base_range_pct,
+                'rally1_gain': rally1_gain_pct,
+                'rally2_gain': rally2_gain_pct,
+                'base_start_date': df.iloc[base_start]['Date'],
+                'base_end_date': df.iloc[base_end]['Date']
+            })
     
-    return results
+    return patterns
 
+# Load data
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    df['Date'] = pd.to_datetime(df['Date'])
+    st.success(f"✅ Loaded {len(df)} candles from uploaded file")
+else:
+    df = generate_demo_data()
+    st.info("📌 Using demo data. Upload your CSV file to analyze your own data.")
 
-# ---------------- PLOT ---------------- #
-def plot_chart(df, zones, symbol, tf):
+# Detect patterns
+patterns = detect_rbr_pattern(df, base_threshold, min_rally_percent, lookback_candles)
+
+# Display results
+st.header(f"🎯 Detected {len(patterns)} RBR Pattern(s)")
+
+if len(patterns) > 0:
+    # Create candlestick chart
     fig = go.Figure()
-    fig.add_candlestick(
-        x=df.index, 
-        open=df["Open"], 
-        high=df["High"],
-        low=df["Low"], 
-        close=df["Close"]
-    )
     
-    for z in zones:
-        ztype, entry, sl, tgt, zh, zl = z
-        color = "red" if ztype == "Supply" else "green"
-        
+    # Add candlestick
+    fig.add_trace(go.Candlestick(
+        x=df['Date'],
+        open=df['Open'],
+        high=df['High'],
+        low=df['Low'],
+        close=df['Close'],
+        name='Price'
+    ))
+    
+    # Add base zones for each pattern
+    for idx, pattern in enumerate(patterns):
+        # Add base zone rectangle
         fig.add_shape(
-            type="rect", 
-            x0=df.index[0], 
-            x1=df.index[-1],
-            y0=zl, 
-            y1=zh, 
-            fillcolor=color, 
-            opacity=0.25, 
-            line_width=0
+            type="rect",
+            x0=pattern['base_start_date'],
+            x1=pattern['base_end_date'],
+            y0=pattern['base_low'],
+            y1=pattern['base_high'],
+            fillcolor="rgba(144, 238, 144, 0.3)",
+            line=dict(color="green", width=2),
+            name=f"Base Zone {idx+1}"
         )
         
-        fig.add_hline(y=entry, line_dash="dot", line_color="blue", 
-                      annotation_text="Entry", annotation_position="right")
-        fig.add_hline(y=sl, line_dash="dash", line_color="red",
-                      annotation_text="SL", annotation_position="right")
-        fig.add_hline(y=tgt, line_dash="dash", line_color="green",
-                      annotation_text="Target", annotation_position="right")
+        # Add annotation
+        fig.add_annotation(
+            x=pattern['base_start_date'],
+            y=pattern['base_high'],
+            text=f"RBR Base<br>Range: {pattern['base_range_pct']:.2f}%",
+            showarrow=True,
+            arrowhead=2,
+            bgcolor="lightgreen",
+            font=dict(size=10)
+        )
     
     fig.update_layout(
-        title=f"{symbol} | {tf}", 
+        title="125 Min RBR Pattern Detection",
+        xaxis_title="Date",
+        yaxis_title="Price",
+        height=600,
         xaxis_rangeslider_visible=False,
-        height=600
+        hovermode='x unified'
     )
     
-    return fig
-
-
-# ---------------- UI ---------------- #
-st.title("📊 Demand & Supply Scanner (Exact Entry | SL | Target)")
-
-if not STOCKS:
-    st.error("⚠️ Could not load stocks. Please check nifty500.csv exists.")
-    st.stop()
-
-selected_tf = st.multiselect(
-    "Select Timeframes",
-    list(TIMEFRAMES.keys()),
-    default=["15m","30m","60m","240m","Daily"]
-)
-
-st.success("""
-✔ NIFTY 500 (50 stocks)  
-✔ Fresh zones (one-touch)  
-✔ Price within 1%  
-✔ Risk : Reward ≥ 1 : 3  
-✔ Exact Entry, SL & Target  
-""")
-
-# Initialize session state
-if 'scan_complete' not in st.session_state:
-    st.session_state['scan_complete'] = False
-
-results_table = []
-
-# SINGLE BUTTON - This is the only scan button in the entire code
-if st.button("🔍 Scan Now", key="scan_button"):
-    if not selected_tf:
-        st.warning("⚠️ Please select at least one timeframe")
-    else:
-        st.session_state['scan_complete'] = True
-        progress = st.progress(0)
-        status_text = st.empty()
-        
-        for i, stock in enumerate(STOCKS):
-            status_text.text(f"Scanning {stock} ({i+1}/{len(STOCKS)})...")
-            progress.progress((i+1)/len(STOCKS))
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Display pattern details
+    st.subheader("📋 Pattern Details")
+    
+    for idx, pattern in enumerate(patterns):
+        with st.expander(f"RBR Pattern #{idx+1}"):
+            col1, col2, col3 = st.columns(3)
             
-            for tf in selected_tf:
-                df = fetch_data(stock, TIMEFRAMES[tf])
-                if df.empty or len(df) < 60:
-                    continue
-                
-                zones = detect_zones(df, tf)
-                
-                if zones:
-                    for z in zones:
-                        ztype, entry, sl, tgt, zh, zl = z
-                        results_table.append({
-                            "Stock": stock.replace(".NS",""),
-                            "TF": tf,
-                            "Type": ztype,
-                            "Entry": round(entry,2),
-                            "SL": round(sl,2),
-                            "Target": round(tgt,2),
-                            "RR": round(abs(tgt-entry)/abs(entry-sl),2)
-                        })
-                    
-                    st.subheader(f"{stock} | {tf}")
-                    st.plotly_chart(
-                        plot_chart(df.tail(200), zones, stock, tf),
-                        use_container_width=True
-                    )
-        
-        status_text.text("✅ Scan complete!")
+            with col1:
+                st.metric("Base Range %", f"{pattern['base_range_pct']:.2f}%")
+                st.write(f"**Base Low:** {pattern['base_low']:.2f}")
+                st.write(f"**Base High:** {pattern['base_high']:.2f}")
+            
+            with col2:
+                st.metric("Rally 1 Gain %", f"{pattern['rally1_gain']:.2f}%", delta="Before Base")
+                st.metric("Rally 2 Gain %", f"{pattern['rally2_gain']:.2f}%", delta="After Base")
+            
+            with col3:
+                st.write(f"**Base Start:** {pattern['base_start_date'].strftime('%Y-%m-%d %H:%M')}")
+                st.write(f"**Base End:** {pattern['base_end_date'].strftime('%Y-%m-%d %H:%M')}")
+                st.write(f"**Support Zone:** {pattern['base_low']:.2f} - {pattern['base_high']:.2f}")
 
-# ---------------- RESULT TABLE ---------------- #
-if results_table:
-    st.subheader("📋 Trade Setups")
-    st.dataframe(pd.DataFrame(results_table), use_container_width=True)
-elif st.session_state.get('scan_complete'):
-    st.info("ℹ️ No trade setups found matching the criteria.")
+else:
+    st.warning("⚠️ No RBR patterns detected with current parameters. Try adjusting the parameters in the sidebar.")
+    
+    # Still show the chart
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=df['Date'],
+        open=df['Open'],
+        high=df['High'],
+        low=df['Low'],
+        close=df['Close'],
+        name='Price'
+    ))
+    
+    fig.update_layout(
+        title="125 Min Candlestick Chart",
+        xaxis_title="Date",
+        yaxis_title="Price",
+        height=600,
+        xaxis_rangeslider_visible=False
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+# Instructions
+with st.expander("ℹ️ How to Use"):
+    st.markdown("""
+    ### CSV File Format
+    Your CSV file should have the following columns:
+    - **Date**: Date and time (e.g., 2024-01-01 09:00:00)
+    - **Open**: Opening price
+    - **High**: Highest price
+    - **Low**: Lowest price
+    - **Close**: Closing price
+    
+    ### RBR Pattern Explanation
+    **Rally-Base-Rally (RBR)** is a bullish continuation pattern consisting of:
+    1. **First Rally**: Initial upward price movement
+    2. **Base Zone**: Consolidation period with minimal price range (demand zone)
+    3. **Second Rally**: Continuation of upward movement after base
+    
+    The base zone acts as a **support level** for future price action.
+    
+    ### Parameters
+    - **Base Consolidation Threshold**: Maximum % range for base zone
+    - **Minimum Rally %**: Minimum gain required for each rally
+    - **Lookback Period**: Number of candles to analyze for pattern detection
+    """)
+
+st.markdown("---")
+st.markdown("💡 **Tip**: The green zones represent demand/support areas where price consolidated before rallying.")
