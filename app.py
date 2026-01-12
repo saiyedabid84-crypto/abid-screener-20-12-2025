@@ -138,7 +138,7 @@ for i in range(len(df) - max_base - 2):
             ):
                 results.append(("Demand", entry, sl, target, zh, zl))
     
-    return results
+return results
 
 
 # ---------------- PLOT ---------------- #
