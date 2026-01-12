@@ -223,12 +223,18 @@ st.success("""
 ✔ Exact Entry, SL & Target  
 """)
 
+# Initialize session state
+if 'scan_complete' not in st.session_state:
+    st.session_state['scan_complete'] = False
+
 results_table = []
 
-if st.button("🔍 Scan Now"):
+# SINGLE BUTTON - This is the only scan button in the entire code
+if st.button("🔍 Scan Now", key="scan_button"):
     if not selected_tf:
         st.warning("⚠️ Please select at least one timeframe")
     else:
+        st.session_state['scan_complete'] = True
         progress = st.progress(0)
         status_text = st.empty()
         
@@ -270,7 +276,3 @@ if results_table:
     st.dataframe(pd.DataFrame(results_table), use_container_width=True)
 elif st.session_state.get('scan_complete'):
     st.info("ℹ️ No trade setups found matching the criteria.")
-
-# Track scan completion
-if st.button("🔍 Scan Now"):
-    st.session_state['scan_complete'] = True
